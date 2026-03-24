@@ -54,13 +54,3 @@ client = Serial(
 client.write(b"message to host")
 print(host.read(15))
 ```
-
-## CI/CD
-
-This repository includes GitHub Actions workflows for:
-
-- CI test matrix on push and pull requests (`.github/workflows/ci.yml`)
-- Auto publish to PyPI on GitHub release publish (`.github/workflows/publish-pypi.yml`)
-
-For PyPI publishing, configure trusted publishing (OIDC) for this repository in
-the PyPI project settings and use the `pypi` GitHub environment.
