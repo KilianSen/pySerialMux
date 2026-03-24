@@ -5,10 +5,16 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "pySerialMux"
 license = "AGPL-3.0-or-later"
+license-files = ["LICENSE"]
+authors = [
+    { name = "KilianSen" },
+]
+readme="README.md"
 version = "0.1.1"
 description = "Drop-in 1-to-N multiplexer for pySerial hardware serial interfaces"
 requires-python = ">=3.8"
 dependencies = ["pyserial>=3.0"]
+keywords= ["serial", "multiplexer", "pySerial", "hardware serial", "UART"]
 
 [project.optional-dependencies]
 test = ["pytest>=7.0"]
