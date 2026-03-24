@@ -3,8 +3,8 @@
 import sys
 import unittest
 
-from pyserial_mux.broker import get_socket_path
-from pyserial_mux.protocol import (
+from pySerialMux.broker import get_socket_path
+from pySerialMux.protocol import (
     MSG_HEADER_SIZE,
     MsgType,
     decode_header,

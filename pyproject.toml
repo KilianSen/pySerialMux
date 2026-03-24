@@ -3,7 +3,7 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "pyserial-mux"
+name = "pySerialMux"
 version = "0.1.0"
 description = "Drop-in 1-to-N multiplexer for pySerial hardware serial interfaces"
 requires-python = ">=3.8"
@@ -14,4 +14,4 @@ test = ["pytest>=7.0"]
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["pyserial_mux*"]
+include = ["pySerialMux*"]

@@ -1,4 +1,4 @@
-"""Unit tests for pyserial_mux.proxy.Serial using mock sockets."""
+"""Unit tests for pySerialMux.proxy.Serial using mock sockets."""
 
 import json
 import socket
@@ -7,8 +7,8 @@ import time
 import unittest
 from unittest.mock import MagicMock, patch
 
-from pyserial_mux.protocol import MsgType, encode_msg, MSG_HEADER_SIZE, decode_header
-from pyserial_mux.proxy import Serial
+from pySerialMux.protocol import MsgType, encode_msg, MSG_HEADER_SIZE, decode_header
+from pySerialMux.proxy import Serial
 
 
 def _make_socket_pair():
@@ -97,8 +97,8 @@ def _build_proxy_with_fake_broker(accept=True, error_msg="", baudrate=9600):
     cfg = {"baudrate": baudrate, "bytesize": 8, "parity": "N", "stopbits": 1}
     proxy._sock.sendall(encode_msg(MsgType.CONFIG, json.dumps(cfg).encode()))
 
-    from pyserial_mux.protocol import MSG_HEADER_SIZE, decode_header
-    from pyserial_mux.proxy import _recv_exact
+    from pySerialMux.protocol import MSG_HEADER_SIZE, decode_header
+    from pySerialMux.proxy import _recv_exact
     header = _recv_exact(proxy._sock, MSG_HEADER_SIZE)
     msg_type, length = decode_header(header)
     payload = _recv_exact(proxy._sock, length) if length else b""

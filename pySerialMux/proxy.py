@@ -362,7 +362,7 @@ class Serial:
         cmd = [
             sys.executable,
             "-m",
-            "pyserial_mux._broker_entry",
+            "pySerialMux._broker_entry",
             port,
             str(self._baudrate),
             json.dumps(kwargs),

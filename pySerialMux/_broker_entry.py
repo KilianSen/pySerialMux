@@ -2,7 +2,7 @@
 
 Usage::
 
-    python -m pyserial_mux._broker_entry <port> <baudrate> [<kwargs_json>]
+    python -m pySerialMux._broker_entry <port> <baudrate> [<kwargs_json>]
 """
 
 if __name__ == "__main__":
@@ -12,6 +12,6 @@ if __name__ == "__main__":
     port = sys.argv[1]
     baudrate = int(sys.argv[2])
     kwargs = json.loads(sys.argv[3]) if len(sys.argv) > 3 else {}
-    from pyserial_mux.broker import run_broker
+    from pySerialMux.broker import run_broker
 
     run_broker(port, baudrate, **kwargs)

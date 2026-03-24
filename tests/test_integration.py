@@ -17,8 +17,8 @@ import time
 import unittest
 from unittest.mock import MagicMock, patch
 
-from pyserial_mux.broker import BrokerServer, get_socket_path
-from pyserial_mux.protocol import MsgType, encode_msg, MSG_HEADER_SIZE, decode_header
+from pySerialMux.broker import BrokerServer, get_socket_path
+from pySerialMux.protocol import MsgType, encode_msg, MSG_HEADER_SIZE, decode_header
 
 
 def _recv_exact(sock: socket.socket, n: int) -> bytes:
@@ -82,7 +82,7 @@ def _start_broker_with_mock_serial(port="/dev/ttyMOCK0", baudrate=9600, read_que
     Returns (broker, thread).
     """
     mock_serial = _MockSerial(read_queue=read_queue)
-    with patch("pyserial_mux.broker.serial.Serial", return_value=mock_serial):
+    with patch("pySerialMux.broker.serial.Serial", return_value=mock_serial):
         broker = BrokerServer(port, baudrate)
     t = threading.Thread(target=broker.start, daemon=True)
     t.start()
@@ -280,7 +280,7 @@ class TestWithSocat(unittest.TestCase):
             else:
                 self.skipTest("socat PTYs did not appear in time")
 
-            from pyserial_mux.proxy import Serial
+            from pySerialMux.proxy import Serial
 
             with Serial(pty_a, baudrate=115200, timeout=1.0) as s:
                 import serial as _serial

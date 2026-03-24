@@ -5,11 +5,11 @@ Drop-in 1-to-N multiplexer for `pyserial` hardware serial interfaces.
 ## Quick usage
 
 ```python
-from pyserial_mux import Serial
+from pySerialMux import Serial
 
 with Serial("/dev/ttyUSB0", baudrate=115200, timeout=1.0) as ser:
-    ser.write(b"hello\n")
-    print(ser.readline())
+  ser.write(b"hello\n")
+  print(ser.readline())
 ```
 
 ## On-demand QoL and debug options
