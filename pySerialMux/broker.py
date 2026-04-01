@@ -24,20 +24,16 @@ log = logging.getLogger(__name__)
 _IS_WINDOWS = sys.platform == "win32"
 
 
-def _normalize_port(port: str) -> str:
-    """Replace path separators and colons with underscores."""
-    for ch in r"/\:":
-        port = port.replace(ch, "_")
-    return port
-
-
 def get_socket_path(port: str) -> str:
     """Return the IPC address for *port*.
 
     POSIX: path to a Unix-domain socket file.
     Windows: path to a small text file that contains the TCP port number.
     """
-    norm = _normalize_port(port)
+    for ch in r"/\:":
+        port = port.replace(ch, "_")
+    norm = port
+
     if _IS_WINDOWS:
         return os.path.join(tempfile.gettempdir(), f"pyserial_mux_{norm}.txt")
     return f"/tmp/pyserial_mux_{norm}.sock"
