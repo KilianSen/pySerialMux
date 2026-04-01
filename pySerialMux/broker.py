@@ -62,6 +62,7 @@ class _ClientHandler:
         self.target_id: str | None = None
         self.virtual_interface: str | None = None
         self.is_virtual_host: bool = False
+        self.ready: bool = False
         self._thread = threading.Thread(
             target=self._run, daemon=True, name=f"broker-client-{addr}"
         )
@@ -161,6 +162,7 @@ class BrokerServer:
         self._virtual_hosts: dict[str, _ClientHandler] = {}
         self._kv_store: dict[str, bytes] = {}
         self._kv_lock = threading.Lock()
+        self._last_ids: list[str] = []
 
         self._serial: serial.Serial | None = None
         if not self._virtual_interface:
@@ -219,7 +221,8 @@ class BrokerServer:
                 self._virtual_hosts[client.virtual_interface] = client
         
         client.send(encode_msg(MsgType.ACK))
-        self._broadcast_client_list()
+        client.ready = True
+        self._broadcast_client_list(newcomer=client)
 
     # ------------------------------------------------------------------
     # Socket setup
@@ -275,22 +278,28 @@ class BrokerServer:
             except OSError:
                 pass
 
-    def _broadcast_client_list(self):
-        """Send MsgType.LIST_CLIENTS to everyone with all current non-empty client_ids."""
+    def _broadcast_client_list(self, newcomer: _ClientHandler | None = None):
+        """Send MsgType.LIST_CLIENTS to everyone if list changed, or just to newcomer."""
         with self._clients_lock:
             ids = sorted(list(set(c.client_id for c in self._clients if c.client_id)))
+            changed = (ids != self._last_ids)
+            self._last_ids = ids
+            targets = list(self._clients)
         
         msg = encode_msg(MsgType.LIST_CLIENTS, json.dumps(ids).encode())
-        with self._clients_lock:
-            targets = list(self._clients)
         for client in targets:
-            client.send(msg)
+            if not client.ready:
+                continue
+            if changed or client is newcomer:
+                client.send(msg)
 
     def _broadcast(self, data: bytes, *, predicate=None):
         msg = encode_msg(MsgType.DATA, data)
         with self._clients_lock:
             targets = list(self._clients)
         for client in targets:
+            if not client.ready:
+                continue
             if client.target_id is not None:
                 # Targeted clients are isolated from general broadcasts
                 continue
@@ -371,7 +380,8 @@ class BrokerServer:
         with self._clients_lock:
             targets = list(self._clients)
         for client in targets:
-            client.send(update_msg)
+            if client.ready:
+                client.send(update_msg)
 
     def _handle_kv_get(self, sender: _ClientHandler, payload: bytes):
         """Retrieve one or all keys from the shared store."""

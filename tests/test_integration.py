@@ -31,13 +31,16 @@ def _recv_exact(sock: socket.socket, n: int) -> bytes:
     return buf
 
 
-def _recv_msg(sock: socket.socket):
-    header = _recv_exact(sock, MSG_HEADER_SIZE)
-    if not header:
-        return None, None
-    msg_type, length = decode_header(header)
-    payload = _recv_exact(sock, length) if length else b""
-    return msg_type, payload
+def _recv_msg(sock: socket.socket, ignore_async=True):
+    while True:
+        header = _recv_exact(sock, MSG_HEADER_SIZE)
+        if not header:
+            return None, None
+        msg_type, length = decode_header(header)
+        payload = _recv_exact(sock, length) if length else b""
+        if ignore_async and msg_type in (MsgType.LIST_CLIENTS, MsgType.KV_UPDATE):
+            continue
+        return msg_type, payload
 
 
 def _handshake(sock: socket.socket, baudrate: int = 9600):
