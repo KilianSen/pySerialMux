@@ -27,13 +27,71 @@ The proxy accepts optional flags through `Serial(...)`:
   Enables virtual routing mode for that interface name.
 
 - `client_id="<id>"`  
-  Required when `virtual_interface` is used.
+  Optional, but required when using `virtual_interface` or `target_id` features.
+
+- `target_id="<id>"`  
+  Routes all writes directly to the client with the matching `client_id` instead 
+  of physical serial. This client will also be isolated from general serial 
+  broadcasts.
 
 - `host_virtual_interface=True`  
   Marks the client as host for that virtual interface. Non-host clients writing
   to that interface are routed to the host client instead of physical serial.
 
-### Virtual interface example
+## Client-to-client targeting
+
+Clients can communicate directly by using `target_id`:
+
+```python
+# Setup two clients
+alpha = Serial("COM1", client_id="Alpha", target_id="Beta")
+beta  = Serial("COM1", client_id="Beta",  target_id="Alpha")
+
+alpha.write(b"Hello Beta")
+print(beta.read(10)) # b'Hello Beta'
+```
+
+### Runtime targeting
+
+You can change or clear the target at any time:
+
+```python
+ser = Serial("COM1", client_id="Alpha")
+ser.target_id = "Beta" # Now talking to Beta
+ser.target_id = None   # Back to physical serial
+```
+
+### Targeted writes
+
+Use the `target_id` keyword argument for one-off targeted messages:
+
+```python
+ser.write(b"One-off message", target_id="Beta")
+```
+
+## Discovery and Shared State
+
+### Client Discovery
+
+Access a live list of other connected clients:
+
+```python
+print(ser.other_clients) # ['Beta', 'Gamma']
+```
+
+### Shared Data Store
+
+Share state information between all clients:
+
+```python
+# Client Alpha
+ser.set_shared("status", b"active")
+
+# Client Beta
+print(ser.shared.get("status")) # b'active'
+```
+
+## Virtual interface example
 
 ```python
 # host side
