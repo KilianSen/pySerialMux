@@ -223,6 +223,12 @@ class Serial:
     def __exit__(self, *args):
         self.close()
 
+    def __del__(self):
+        try:
+            self.close()
+        except:
+            pass
+
     # ------------------------------------------------------------------
     # Properties
     # ------------------------------------------------------------------
@@ -237,11 +243,20 @@ class Serial:
             return len(self._buffer)
 
     @property
-    def port(self):
+    def out_waiting(self) -> int:
+        """Return 0 as we don't track the broker's output queue depth."""
+        return 0
+
+    @property
+    def name(self) -> str | None:
+        return self._port
+
+    @property
+    def port(self) -> str | None:
         return self._port
 
     @port.setter
-    def port(self, value):
+    def port(self, value: str | None):
         self._port = value
 
     @property
@@ -251,6 +266,77 @@ class Serial:
     @baudrate.setter
     def baudrate(self, value: int):
         self._baudrate = value
+        self._send_runtime_config()
+
+    @property
+    def bytesize(self) -> int:
+        return self._bytesize
+
+    @bytesize.setter
+    def bytesize(self, value: int):
+        self._bytesize = value
+        self._send_runtime_config()
+
+    @property
+    def parity(self) -> str:
+        return self._parity
+
+    @parity.setter
+    def parity(self, value: str):
+        self._parity = value
+        self._send_runtime_config()
+
+    @property
+    def stopbits(self) -> float:
+        return self._stopbits
+
+    @stopbits.setter
+    def stopbits(self, value: float):
+        self._stopbits = value
+        self._send_runtime_config()
+
+    @property
+    def xonxoff(self) -> bool:
+        return self._xonxoff
+
+    @xonxoff.setter
+    def xonxoff(self, value: bool):
+        self._xonxoff = value
+        self._send_runtime_config()
+
+    @property
+    def rtscts(self) -> bool:
+        return self._rtscts
+
+    @rtscts.setter
+    def rtscts(self, value: bool):
+        self._rtscts = value
+        self._send_runtime_config()
+
+    @property
+    def dsrdtr(self) -> bool:
+        return self._dsrdtr
+
+    @dsrdtr.setter
+    def dsrdtr(self, value: bool):
+        self._dsrdtr = value
+        self._send_runtime_config()
+
+    @property
+    def cts(self) -> bool:
+        return False
+
+    @property
+    def dsr(self) -> bool:
+        return False
+
+    @property
+    def ri(self) -> bool:
+        return False
+
+    @property
+    def cd(self) -> bool:
+        return False
 
     @property
     def client_id(self) -> str | None:
@@ -321,23 +407,43 @@ class Serial:
 
         return bytes(result)
 
-    def readline(self, size: int = -1) -> bytes:
-        """Read until newline (or *size* bytes or timeout)."""
+    def read_until(self, expected: bytes = b"\n", size: int | None = None) -> bytes:
+        """Read until an expected sequence is found (or *size* or timeout)."""
         deadline = None if self.timeout is None else time.monotonic() + self.timeout
         result = bytearray()
 
         while True:
             with self._buffer_lock:
-                while self._buffer:
-                    byte = self._buffer[0:1]
-                    del self._buffer[0]
-                    result += byte
-                    if byte == b"\n":
-                        return bytes(result)
-                    if size != -1 and len(result) >= size:
-                        return bytes(result)
+                # Check if 'expected' is in our buffer
+                idx = self._buffer.find(expected)
+                if idx != -1:
+                    take = idx + len(expected)
+                    if size is not None and len(result) + take > size:
+                        take = size - len(result)
+                    
+                    actual_take = min(take, len(self._buffer))
+                    result += self._buffer[:actual_take]
+                    del self._buffer[:actual_take]
+                    return bytes(result)
+
+                if self._buffer:
+                    if size is not None:
+                        can_take = size - len(result)
+                        if can_take <= 0:
+                            return bytes(result)
+                        take = min(len(self._buffer), can_take)
+                        result += self._buffer[:take]
+                        del self._buffer[:take]
+                    else:
+                        # Take all but keep some for potential 'expected' overlap
+                        # Simple implementation: take everything if expected is not found
+                        result += self._buffer
+                        self._buffer.clear()
 
             if self._closed:
+                break
+
+            if size is not None and len(result) >= size:
                 break
 
             remaining = None
@@ -350,6 +456,36 @@ class Serial:
             self._buffer_event.wait(timeout=remaining)
 
         return bytes(result)
+
+    def read_all(self) -> bytes:
+        """Read all currently available data."""
+        with self._buffer_lock:
+            res = bytes(self._buffer)
+            self._buffer.clear()
+        return res
+
+    def readinto(self, b) -> int:
+        """Read into a pre-allocated buffer."""
+        data = self.read(len(b))
+        n = len(data)
+        b[:n] = data
+        return n
+
+    def readline(self, size: int = -1) -> bytes:
+        """Read until newline (or *size* bytes or timeout)."""
+        return self.read_until(b"\n", size=size if size != -1 else None)
+
+    def readlines(self, hint: int = -1) -> list[bytes]:
+        """Read a list of lines."""
+        lines = []
+        while True:
+            line = self.readline()
+            if not line:
+                break
+            lines.append(line)
+            if hint != -1 and sum(len(l) for l in lines) >= hint:
+                break
+        return lines
 
     def write(self, data: bytes, target_id: str | None = None) -> int:
         if isinstance(data, str):
@@ -374,8 +510,28 @@ class Serial:
             self._buffer.clear()
         self._buffer_event.clear()
 
+    def flushInput(self):
+        """Legacy alias for reset_input_buffer()."""
+        self.reset_input_buffer()
+
     def reset_output_buffer(self):
         """No-op: the broker's write queue cannot be cleared per-client."""
+
+    def flushOutput(self):
+        """Legacy alias for reset_output_buffer()."""
+        self.reset_output_buffer()
+
+    def flush(self):
+        """No-op: writes are sent to broker immediately."""
+
+    def readable(self) -> bool:
+        return True
+
+    def writable(self) -> bool:
+        return True
+
+    def seekable(self) -> bool:
+        return False
 
     # ------------------------------------------------------------------
     # Internal helpers
