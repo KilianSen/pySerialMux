@@ -6,6 +6,7 @@ import logging
 import os
 import queue
 import socket
+import struct
 import sys
 import tempfile
 import threading
@@ -104,6 +105,12 @@ class _ClientHandler:
             elif msg_type == MsgType.WRITE_TO:
                 self._broker._handle_write_to(self, payload)
 
+            elif msg_type == MsgType.KV_SET:
+                self._broker._handle_kv_set(self, payload)
+
+            elif msg_type == MsgType.KV_GET:
+                self._broker._handle_kv_get(self, payload)
+
             elif msg_type == MsgType.CONFIG:
                 try:
                     cfg = json.loads(payload.decode())
@@ -135,6 +142,7 @@ class BrokerServer:
         debug: bool = False,
     ):
         if debug:
+            logging.basicConfig(level=logging.DEBUG)
             log.setLevel(logging.DEBUG)
         self._port = port
         self._baudrate = baudrate
@@ -151,6 +159,8 @@ class BrokerServer:
         self._write_queue: queue.Queue = queue.Queue()
         self._stop_event = threading.Event()
         self._virtual_hosts: dict[str, _ClientHandler] = {}
+        self._kv_store: dict[str, bytes] = {}
+        self._kv_lock = threading.Lock()
 
         self._serial: serial.Serial | None = None
         if not self._virtual_interface:
@@ -342,6 +352,47 @@ class BrokerServer:
         msg = encode_msg(MsgType.DATA, data)
         for target in targets:
             target.send(msg)
+
+    def _handle_kv_set(self, sender: _ClientHandler, payload: bytes):
+        """Update a key in the shared store and broadcast it."""
+        if not payload:
+            return
+        key_len = payload[0]
+        if len(payload) < 1 + key_len:
+            return
+        key = payload[1 : 1 + key_len].decode()
+        value = payload[1 + key_len :]
+
+        with self._kv_lock:
+            self._kv_store[key] = value
+
+        # Broadcast update to everyone (including sender, simplifies local state)
+        update_msg = encode_msg(MsgType.KV_UPDATE, payload)
+        with self._clients_lock:
+            targets = list(self._clients)
+        for client in targets:
+            client.send(update_msg)
+
+    def _handle_kv_get(self, sender: _ClientHandler, payload: bytes):
+        """Retrieve one or all keys from the shared store."""
+        if not payload:
+            # Send ALL keys
+            with self._kv_lock:
+                items = list(self._kv_store.items())
+            for key, value in items:
+                k_bytes = key.encode()
+                p = struct.pack("B", len(k_bytes)) + k_bytes + value
+                sender.send(encode_msg(MsgType.KV_UPDATE, p))
+            return
+
+        key = payload.decode()
+        with self._kv_lock:
+            value = self._kv_store.get(key)
+
+        if value is not None:
+            k_bytes = key.encode()
+            p = struct.pack("B", len(k_bytes)) + k_bytes + value
+            sender.send(encode_msg(MsgType.KV_UPDATE, p))
 
     # ------------------------------------------------------------------
     # Background threads

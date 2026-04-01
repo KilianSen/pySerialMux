@@ -104,6 +104,7 @@ class Serial:
         self._debug = bool(kwargs.get("debug", False))
 
         if self._debug:
+            logging.basicConfig(level=logging.DEBUG)
             log.setLevel(logging.DEBUG)
 
         self._sock: socket.socket | None = None
@@ -113,6 +114,7 @@ class Serial:
         self._buffer_event = threading.Event()
         self._reader_thread: threading.Thread | None = None
         self.other_clients: list[str] = []
+        self.shared: dict[str, bytes] = {}
 
         if port is not None:
             self.open()
@@ -173,11 +175,28 @@ class Serial:
             self._closed = True
             raise OSError(f"Unexpected handshake response: {msg_type}")
 
+        # Request initial shared store sync
+        self._sock.sendall(encode_msg(MsgType.KV_GET))
+
         # Start background reader
         self._reader_thread = threading.Thread(
             target=self._reader_loop, daemon=True, name="proxy-reader"
         )
         self._reader_thread.start()
+
+    def set_shared(self, key: str, value: bytes):
+        """Update a key in the shared data store."""
+        if not isinstance(key, str):
+            raise TypeError("key must be str")
+        if not isinstance(value, (bytes, bytearray)):
+            raise TypeError("value must be bytes-like")
+        
+        k_bytes = key.encode()
+        if len(k_bytes) > 255:
+            raise ValueError("key too long")
+        
+        payload = struct.pack("B", len(k_bytes)) + k_bytes + bytes(value)
+        self._sock.sendall(encode_msg(MsgType.KV_SET, payload))
 
     def close(self):
         if self._closed:
@@ -378,6 +397,12 @@ class Serial:
                 elif msg_type == MsgType.LIST_CLIENTS:
                     all_ids = json.loads(payload.decode())
                     self.other_clients = [cid for cid in all_ids if cid != self._client_id]
+                elif msg_type == MsgType.KV_UPDATE:
+                    if len(payload) >= 1:
+                        k_len = payload[0]
+                        key = payload[1 : 1 + k_len].decode()
+                        val = payload[1 + k_len :]
+                        self.shared[key] = val
                 elif msg_type == MsgType.ERROR:
                     break
             except OSError:

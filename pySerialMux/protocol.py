@@ -14,6 +14,9 @@ class MsgType(IntEnum):
     ACK    = 0x06  # broker -> client: config accepted
     WRITE_TO = 0x07 # client -> broker: bytes to write to specific target
     LIST_CLIENTS = 0x08 # broker -> client: JSON list of active client IDs
+    KV_SET = 0x09 # client -> broker: [1b key len][key][value]
+    KV_GET = 0x0A # client -> broker: [key]
+    KV_UPDATE = 0x0B # broker -> client: [1b key len][key][value]
 
 
 def encode_msg(msg_type: MsgType, payload: bytes = b'') -> bytes:
