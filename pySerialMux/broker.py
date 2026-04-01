@@ -10,12 +10,14 @@ import struct
 import sys
 import tempfile
 import threading
+import time
 
 import serial
 
 from .protocol import (
     MSG_HEADER_SIZE,
     MsgType,
+    OriginType,
     decode_header,
     encode_msg,
 )
@@ -31,13 +33,13 @@ def get_socket_path(port: str) -> str:
     POSIX: path to a Unix-domain socket file.
     Windows: path to a small text file that contains the TCP port number.
     """
+    safe_port = port
     for ch in r"/\:":
-        port = port.replace(ch, "_")
-    norm = port
+        safe_port = safe_port.replace(ch, "_")
 
     if _IS_WINDOWS:
-        return os.path.join(tempfile.gettempdir(), f"pyserial_mux_{norm}.txt")
-    return f"/tmp/pyserial_mux_{norm}.sock"
+        return os.path.join(tempfile.gettempdir(), f"pyserial_mux_{safe_port}.txt")
+    return f"/tmp/pyserial_mux_{safe_port}.sock"
 
 
 def _recv_exact(sock: socket.socket, n: int) -> bytes:
@@ -63,6 +65,7 @@ class _ClientHandler:
         self.virtual_interface: str | None = None
         self.is_virtual_host: bool = False
         self.ready: bool = False
+        self.logs_enabled: bool = False
         self._thread = threading.Thread(
             target=self._run, daemon=True, name=f"broker-client-{addr}"
         )
@@ -97,6 +100,7 @@ class _ClientHandler:
 
             msg_type, length = decode_header(header)
             payload = _recv_exact(self._conn, length) if length else b""
+            log.debug("Broker received msg %s from %s", msg_type, self._addr)
             if length and len(payload) < length:
                 break  # connection closed mid-message
 
@@ -198,6 +202,9 @@ class BrokerServer:
         if "client_id" in cfg:
             client.client_id = str(cfg["client_id"]) if cfg["client_id"] is not None else None
 
+        if "logs" in cfg:
+            client.logs_enabled = bool(cfg["logs"])
+
         if "target_id" in cfg:
             target_id = cfg["target_id"]
             if target_id is not None:
@@ -293,6 +300,29 @@ class BrokerServer:
             if changed or client is newcomer:
                 client.send(msg)
 
+    def _broadcast_log(self, origin_type: OriginType, origin_id: str | None, data: bytes):
+        """Send a binary log message to all clients that have logs enabled."""
+        if not data:
+            return
+        
+        # Format: [8 bytes timestamp (double)][1 byte origin_type][1 byte origin_id_len][origin_id][binary_data]
+        ts = time.time()
+        oid_bytes = str(origin_id or "").encode()
+        if len(oid_bytes) > 255:
+            oid_bytes = oid_bytes[:255]
+        
+        payload = struct.pack(">dB", ts, int(origin_type)) + struct.pack("B", len(oid_bytes)) + oid_bytes + data
+        msg = encode_msg(MsgType.LOG_DATA, payload)
+        
+        with self._clients_lock:
+            targets = [c for c in self._clients if c.ready and c.logs_enabled]
+        
+        if targets:
+            log.debug("Broadcasting log to %d clients", len(targets))
+        
+        for client in targets:
+            client.send(msg)
+
     def _broadcast(self, data: bytes, *, predicate=None):
         msg = encode_msg(MsgType.DATA, data)
         with self._clients_lock:
@@ -308,6 +338,8 @@ class BrokerServer:
             client.send(msg)
 
     def _handle_write(self, sender: _ClientHandler, payload: bytes):
+        log.debug("Broker _handle_write from %s: %r", sender.client_id, payload)
+        self._broadcast_log(OriginType.CLIENT, sender.client_id, payload)
         if sender.target_id:
             with self._clients_lock:
                 targets = [c for c in self._clients if c.client_id == sender.target_id]
@@ -350,6 +382,8 @@ class BrokerServer:
         target_id_bytes = payload[1 : 1 + tid_len]
         target_id = target_id_bytes.decode()
         data = payload[1 + tid_len :]
+
+        self._broadcast_log(OriginType.CLIENT, sender.client_id, data)
 
         with self._clients_lock:
             targets = [c for c in self._clients if c.client_id == target_id]
@@ -414,6 +448,7 @@ class BrokerServer:
             try:
                 data = self._serial.read(self._serial.in_waiting or 1)
                 if data:
+                    self._broadcast_log(OriginType.SERIAL, self._port, data)
                     self._broadcast(data)
             except serial.SerialException as exc:
                 log.error("Serial read error: %s", exc)
@@ -426,6 +461,7 @@ class BrokerServer:
             try:
                 payload = self._write_queue.get(timeout=0.1)
                 self._serial.write(payload)
+                self._broadcast_log(OriginType.SERIAL, self._port, payload)
             except queue.Empty:
                 continue
             except serial.SerialException as exc:

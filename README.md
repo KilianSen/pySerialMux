@@ -19,6 +19,10 @@ The proxy accepts optional flags through `Serial(...)`:
 - `debug=True`  
   Enables debug logging for proxy/broker lifecycle details.
 
+- `logs=True`  
+  Enables global binary message logging. The client will receive and buffer
+  all serial and client-to-client traffic with timestamps and origin IDs.
+
 - `ignore_baudrate_diff=True`  
   Allows a client to connect even when its requested baudrate differs from the
   broker's baudrate.
@@ -89,6 +93,40 @@ ser.set_shared("status", b"active")
 
 # Client Beta
 print(ser.shared.get("status")) # b'active'
+```
+
+## Global Logging
+
+When `logs=True` is enabled, the broker aggregates all traffic (serial and client-to-client) with high-precision timestamps and origin IDs.
+
+### Accessing logs
+
+Retrieve all buffered log entries:
+
+```python
+# Returns a list of dicts: 
+# [{'timestamp': float, 'origin_type': OriginType, 'origin_id': str, 'data': bytes}, ...]
+logs = ser.get_logs()
+```
+
+### Real-time logging
+
+Hook into every message as it arrives:
+
+```python
+def my_logger(entry):
+    print(f"[{entry['timestamp']}] {entry['origin_id']}: {entry['data']}")
+
+ser.on_log = my_logger
+```
+
+### Runtime control
+
+You can enable or disable logging at any time:
+
+```python
+ser.logs = True  # Start receiving logs
+ser.logs = False # Stop receiving logs
 ```
 
 ## Virtual interface example

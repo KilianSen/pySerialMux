@@ -20,6 +20,7 @@ from collections import deque
 from .protocol import (
     MSG_HEADER_SIZE,
     MsgType,
+    OriginType,
     decode_header,
     encode_msg,
 )
@@ -40,10 +41,13 @@ def _normalize_port(port: str) -> str:
 
 def get_socket_path(port: str) -> str:
     """IPC address for *port* (mirrors broker's logic)."""
-    norm = _normalize_port(port)
+    safe_port = port
+    for ch in r"/\:":
+        safe_port = safe_port.replace(ch, "_")
+
     if _IS_WINDOWS:
-        return os.path.join(tempfile.gettempdir(), f"pyserial_mux_{norm}.txt")
-    return f"/tmp/pyserial_mux_{norm}.sock"
+        return os.path.join(tempfile.gettempdir(), f"pyserial_mux_{safe_port}.txt")
+    return f"/tmp/pyserial_mux_{safe_port}.sock"
 
 
 def _recv_exact(sock: socket.socket, n: int) -> bytes:
@@ -101,6 +105,7 @@ class Serial:
         self._client_id = kwargs.get("client_id")
         self._target_id = kwargs.get("target_id")
         self._host_virtual_interface = bool(kwargs.get("host_virtual_interface", False))
+        self._logs = bool(kwargs.get("logs", False))
         self._debug = bool(kwargs.get("debug", False))
 
         if self._debug:
@@ -115,6 +120,8 @@ class Serial:
         self._reader_thread: threading.Thread | None = None
         self.other_clients: list[str] = []
         self.shared: dict[str, bytes] = {}
+        self.on_log: callable | None = None
+        self._log_queue: deque = deque(maxlen=1000)
 
         if port is not None:
             self.open()
@@ -155,6 +162,7 @@ class Serial:
             "client_id": self._client_id,
             "target_id": self._target_id,
             "host_virtual_interface": self._host_virtual_interface,
+            "logs": self._logs,
         }
         if self._debug:
             log.debug("Sending broker config: %s", cfg)
@@ -356,6 +364,23 @@ class Serial:
         self._target_id = value
         self._send_runtime_config()
 
+    @property
+    def logs(self) -> bool:
+        return self._logs
+
+    @logs.setter
+    def logs(self, value: bool):
+        self._logs = bool(value)
+        self._send_runtime_config()
+
+    def get_logs(self) -> list[dict]:
+        """Return a list of all buffered log entries."""
+        return list(self._log_queue)
+
+    def clear_logs(self):
+        """Clear the local log buffer."""
+        self._log_queue.clear()
+
     def _send_runtime_config(self):
         if self._closed:
             return
@@ -369,6 +394,7 @@ class Serial:
             "client_id": self._client_id,
             "target_id": self._target_id,
             "host_virtual_interface": self._host_virtual_interface,
+            "logs": self._logs,
         }
         self._sock.sendall(encode_msg(MsgType.CONFIG, json.dumps(cfg).encode()))
 
@@ -553,6 +579,26 @@ class Serial:
                 elif msg_type == MsgType.LIST_CLIENTS:
                     all_ids = json.loads(payload.decode())
                     self.other_clients = [cid for cid in all_ids if cid != self._client_id]
+                elif msg_type == MsgType.LOG_DATA:
+                    # Payload: [8 bytes timestamp (double)][1 byte origin_type][1 byte origin_id_len][origin_id][binary_data]
+                    if len(payload) >= 10:
+                        ts, otype_val = struct.unpack(">dB", payload[:9])
+                        otype = OriginType(otype_val)
+                        oid_len = payload[9]
+                        oid = payload[10 : 10 + oid_len].decode()
+                        data = payload[10 + oid_len :]
+                        log_entry = {
+                            "timestamp": ts,
+                            "origin_type": otype,
+                            "origin_id": oid,
+                            "data": data,
+                        }
+                        self._log_queue.append(log_entry)
+                        if self.on_log:
+                            try:
+                                self.on_log(log_entry)
+                            except Exception:
+                                pass
                 elif msg_type == MsgType.KV_UPDATE:
                     if len(payload) >= 1:
                         k_len = payload[0]

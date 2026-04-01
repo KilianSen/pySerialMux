@@ -24,7 +24,10 @@ from pySerialMux.protocol import MsgType, encode_msg, MSG_HEADER_SIZE, decode_he
 def _recv_exact(sock: socket.socket, n: int) -> bytes:
     buf = b""
     while len(buf) < n:
-        chunk = sock.recv(n - len(buf))
+        try:
+            chunk = sock.recv(n - len(buf))
+        except socket.timeout:
+            return buf
         if not chunk:
             return b""
         buf += chunk
@@ -38,7 +41,7 @@ def _recv_msg(sock: socket.socket, ignore_async=True):
             return None, None
         msg_type, length = decode_header(header)
         payload = _recv_exact(sock, length) if length else b""
-        if ignore_async and msg_type in (MsgType.LIST_CLIENTS, MsgType.KV_UPDATE):
+        if ignore_async and msg_type in (MsgType.LIST_CLIENTS, MsgType.KV_UPDATE, MsgType.LOG_DATA):
             continue
         return msg_type, payload
 
@@ -52,6 +55,7 @@ def _handshake(sock: socket.socket, baudrate: int = 9600):
 
 def _connect_unix(path: str) -> socket.socket:
     s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    s.settimeout(1.0)
     s.connect(path)
     return s
 
@@ -86,7 +90,7 @@ def _start_broker_with_mock_serial(port="/dev/ttyMOCK0", baudrate=9600, read_que
     """
     mock_serial = _MockSerial(read_queue=read_queue)
     with patch("pySerialMux.broker.serial.Serial", return_value=mock_serial):
-        broker = BrokerServer(port, baudrate)
+        broker = BrokerServer(port, baudrate, debug=True)
     t = threading.Thread(target=broker.start, daemon=True)
     t.start()
     # Give broker time to start listening
@@ -205,7 +209,7 @@ class TestBrokerTwoClients(unittest.TestCase):
             _handshake(c1)
             c1.sendall(encode_msg(MsgType.WRITE, b"hello"))
             # Give writer thread time to dequeue
-            time.sleep(0.2)
+            time.sleep(0.5)
             self.assertIn(b"hello", bytes(self.mock_serial._written))
         finally:
             c1.sendall(encode_msg(MsgType.CLOSE))
@@ -251,6 +255,39 @@ class TestBrokerTwoClients(unittest.TestCase):
                     s.close()
                 except OSError:
                     pass
+
+    def test_logging_functionality(self):
+        from pySerialMux.proxy import Serial
+        from pySerialMux.protocol import OriginType
+        
+        # We'll use a real Serial proxy for this to test the full stack
+        with Serial(self.broker._port, baudrate=9600, logs=True) as s1:
+            # Client 2 doesn't need logs
+            with Serial(self.broker._port, baudrate=9600, client_id="Alpha") as s2:
+                # Trigger a write from s2 (Client origin)
+                test_payload = b"hello log"
+                s2.write(test_payload)
+                
+                # Give time for log to propagate
+                time.sleep(0.3)
+                
+                logs = s1.get_logs()
+                # We expect at least two logs: 
+                # 1. CLIENT 'Alpha' writing 'hello log'
+                # 2. SERIAL '/dev/ttyMOCK0' writing 'hello log' (because it went to serial)
+                
+                self.assertTrue(len(logs) >= 2)
+                
+                # Find client log
+                client_log = next((l for l in logs if l["origin_type"] == OriginType.CLIENT and l["data"] == test_payload), None)
+                self.assertIsNotNone(client_log)
+                self.assertEqual(client_log["origin_id"], "Alpha")
+                self.assertIsInstance(client_log["timestamp"], float)
+
+                # Find serial log
+                serial_log = next((l for l in logs if l["origin_type"] == OriginType.SERIAL and l["data"] == test_payload), None)
+                self.assertIsNotNone(serial_log)
+                self.assertIsInstance(serial_log["timestamp"], float)
 
 @unittest.skipIf(
     shutil.which("socat") is None or sys.platform == "win32",
