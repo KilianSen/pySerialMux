@@ -58,6 +58,7 @@ class _ClientHandler:
         self._addr = addr
         self._broker = broker
         self.client_id: str | None = None
+        self.target_id: str | None = None
         self.virtual_interface: str | None = None
         self.is_virtual_host: bool = False
         self._thread = threading.Thread(
@@ -99,6 +100,9 @@ class _ClientHandler:
 
             if msg_type == MsgType.WRITE:
                 self._broker._handle_write(self, payload)
+
+            elif msg_type == MsgType.WRITE_TO:
+                self._broker._handle_write_to(self, payload)
 
             elif msg_type == MsgType.CONFIG:
                 try:
@@ -178,11 +182,22 @@ class BrokerServer:
             )
 
         iface = cfg.get("virtual_interface") or self._virtual_interface
+        
+        if "client_id" in cfg:
+            client.client_id = str(cfg["client_id"]) if cfg["client_id"] is not None else None
+
+        if "target_id" in cfg:
+            target_id = cfg["target_id"]
+            if target_id is not None:
+                if not client.client_id:
+                    raise ValueError("target_id requires non-empty client_id")
+                client.target_id = str(target_id)
+            else:
+                client.target_id = None
+        
         if iface:
-            client_id = cfg.get("client_id")
-            if not client_id:
+            if not client.client_id:
                 raise ValueError("virtual_interface requires non-empty client_id")
-            client.client_id = str(client_id)
             client.virtual_interface = str(iface)
             client.is_virtual_host = bool(cfg.get("host_virtual_interface", False))
             if client.is_virtual_host:
@@ -192,7 +207,9 @@ class BrokerServer:
                         f"Virtual interface {client.virtual_interface!r} already has a host"
                     )
                 self._virtual_hosts[client.virtual_interface] = client
+        
         client.send(encode_msg(MsgType.ACK))
+        self._broadcast_client_list()
 
     # ------------------------------------------------------------------
     # Socket setup
@@ -236,6 +253,9 @@ class BrokerServer:
                 if host is handler:
                     del self._virtual_hosts[handler.virtual_interface]
             remaining = len(self._clients)
+        
+        self._broadcast_client_list()
+
         if remaining == 0:
             log.debug("Last client disconnected – shutting down broker")
             self._stop_event.set()
@@ -245,16 +265,41 @@ class BrokerServer:
             except OSError:
                 pass
 
+    def _broadcast_client_list(self):
+        """Send MsgType.LIST_CLIENTS to everyone with all current non-empty client_ids."""
+        with self._clients_lock:
+            ids = sorted(list(set(c.client_id for c in self._clients if c.client_id)))
+        
+        msg = encode_msg(MsgType.LIST_CLIENTS, json.dumps(ids).encode())
+        with self._clients_lock:
+            targets = list(self._clients)
+        for client in targets:
+            client.send(msg)
+
     def _broadcast(self, data: bytes, *, predicate=None):
         msg = encode_msg(MsgType.DATA, data)
         with self._clients_lock:
             targets = list(self._clients)
         for client in targets:
+            if client.target_id is not None:
+                # Targeted clients are isolated from general broadcasts
+                continue
             if predicate is not None and not predicate(client):
                 continue
             client.send(msg)
 
     def _handle_write(self, sender: _ClientHandler, payload: bytes):
+        if sender.target_id:
+            with self._clients_lock:
+                targets = [c for c in self._clients if c.client_id == sender.target_id]
+            if not targets:
+                log.debug("No targets found for target_id %r", sender.target_id)
+                return
+            msg = encode_msg(MsgType.DATA, payload)
+            for target in targets:
+                target.send(msg)
+            return
+
         iface = sender.virtual_interface
         if iface:
             if sender.is_virtual_host:
@@ -275,6 +320,28 @@ class BrokerServer:
             host.send(encode_msg(MsgType.DATA, payload))
             return
         self._write_queue.put(payload)
+
+    def _handle_write_to(self, sender: _ClientHandler, payload: bytes):
+        """Handle a targeted write from a specific client message."""
+        if not payload:
+            return
+        tid_len = payload[0]
+        if len(payload) < 1 + tid_len:
+            return
+        target_id_bytes = payload[1 : 1 + tid_len]
+        target_id = target_id_bytes.decode()
+        data = payload[1 + tid_len :]
+
+        with self._clients_lock:
+            targets = [c for c in self._clients if c.client_id == target_id]
+
+        if not targets:
+            log.debug("No targets found for targeted write to %r", target_id)
+            return
+
+        msg = encode_msg(MsgType.DATA, data)
+        for target in targets:
+            target.send(msg)
 
     # ------------------------------------------------------------------
     # Background threads

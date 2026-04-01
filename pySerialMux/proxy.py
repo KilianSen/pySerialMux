@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import socket
+import struct
 import subprocess
 import sys
 import tempfile
@@ -98,6 +99,7 @@ class Serial:
         self._ignore_baudrate_diff = bool(kwargs.get("ignore_baudrate_diff", False))
         self._virtual_interface = kwargs.get("virtual_interface")
         self._client_id = kwargs.get("client_id")
+        self._target_id = kwargs.get("target_id")
         self._host_virtual_interface = bool(kwargs.get("host_virtual_interface", False))
         self._debug = bool(kwargs.get("debug", False))
 
@@ -110,6 +112,7 @@ class Serial:
         self._buffer_lock = threading.Lock()
         self._buffer_event = threading.Event()
         self._reader_thread: threading.Thread | None = None
+        self.other_clients: list[str] = []
 
         if port is not None:
             self.open()
@@ -148,6 +151,7 @@ class Serial:
             "ignore_baudrate_diff": self._ignore_baudrate_diff,
             "virtual_interface": self._virtual_interface,
             "client_id": self._client_id,
+            "target_id": self._target_id,
             "host_virtual_interface": self._host_virtual_interface,
         }
         if self._debug:
@@ -229,6 +233,40 @@ class Serial:
     def baudrate(self, value: int):
         self._baudrate = value
 
+    @property
+    def client_id(self) -> str | None:
+        return self._client_id
+
+    @client_id.setter
+    def client_id(self, value: str | None):
+        self._client_id = value
+        self._send_runtime_config()
+
+    @property
+    def target_id(self) -> str | None:
+        return self._target_id
+
+    @target_id.setter
+    def target_id(self, value: str | None):
+        self._target_id = value
+        self._send_runtime_config()
+
+    def _send_runtime_config(self):
+        if self._closed:
+            return
+        cfg = {
+            "baudrate": self._baudrate,
+            "bytesize": self._bytesize,
+            "parity": self._parity,
+            "stopbits": self._stopbits,
+            "ignore_baudrate_diff": self._ignore_baudrate_diff,
+            "virtual_interface": self._virtual_interface,
+            "client_id": self._client_id,
+            "target_id": self._target_id,
+            "host_virtual_interface": self._host_virtual_interface,
+        }
+        self._sock.sendall(encode_msg(MsgType.CONFIG, json.dumps(cfg).encode()))
+
     # ------------------------------------------------------------------
     # Read / write API
     # ------------------------------------------------------------------
@@ -294,12 +332,21 @@ class Serial:
 
         return bytes(result)
 
-    def write(self, data: bytes) -> int:
+    def write(self, data: bytes, target_id: str | None = None) -> int:
         if isinstance(data, str):
             raise TypeError("data must be bytes-like, not str")
         if self._closed:
             raise OSError("Serial is closed")
-        self._sock.sendall(encode_msg(MsgType.WRITE, bytes(data)))
+        
+        if target_id is not None:
+            # Payload: [1 byte target_id len][target_id string][bytes data]
+            tid_bytes = str(target_id).encode()
+            if len(tid_bytes) > 255:
+                raise ValueError("target_id too long (max 255 bytes)")
+            payload = struct.pack("B", len(tid_bytes)) + tid_bytes + bytes(data)
+            self._sock.sendall(encode_msg(MsgType.WRITE_TO, payload))
+        else:
+            self._sock.sendall(encode_msg(MsgType.WRITE, bytes(data)))
         return len(data)
 
     def reset_input_buffer(self):
@@ -328,6 +375,9 @@ class Serial:
                     with self._buffer_lock:
                         self._buffer += payload
                     self._buffer_event.set()
+                elif msg_type == MsgType.LIST_CLIENTS:
+                    all_ids = json.loads(payload.decode())
+                    self.other_clients = [cid for cid in all_ids if cid != self._client_id]
                 elif msg_type == MsgType.ERROR:
                     break
             except OSError:

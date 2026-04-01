@@ -12,6 +12,8 @@ class MsgType(IntEnum):
     CONFIG = 0x04  # client -> broker: JSON initial config
     ERROR  = 0x05  # broker -> client: error text
     ACK    = 0x06  # broker -> client: config accepted
+    WRITE_TO = 0x07 # client -> broker: bytes to write to specific target
+    LIST_CLIENTS = 0x08 # broker -> client: JSON list of active client IDs
 
 
 def encode_msg(msg_type: MsgType, payload: bytes = b'') -> bytes:
