@@ -74,6 +74,21 @@ def _connect_to_broker(port: str) -> socket.socket:
     return sock
 
 
+def freeze_support() -> None:
+    """Call at the top of your PyInstaller entry point to enable broker subprocess support."""
+    if not getattr(sys, "frozen", False):
+        return
+    if "--_pyserial-mux-broker" not in sys.argv:
+        return
+    idx = sys.argv.index("--_pyserial-mux-broker")
+    port = sys.argv[idx + 1]
+    baudrate = int(sys.argv[idx + 2])
+    kwargs = json.loads(sys.argv[idx + 3]) if len(sys.argv) > idx + 3 else {}
+    from pySerialMux.broker import run_broker
+    run_broker(port, baudrate, **kwargs)
+    sys.exit(0)
+
+
 class Serial:
     """Drop-in replacement for ``serial.Serial`` backed by a broker process."""
 
@@ -636,20 +651,34 @@ class Serial:
         if self._virtual_interface:
             kwargs["virtual_interface"] = self._virtual_interface
         kwargs["debug"] = self._debug
-        cmd = [
-            sys.executable,
-            "-m",
-            "pySerialMux._broker_entry",
-            port,
-            str(self._baudrate),
-            json.dumps(kwargs),
-        ]
-        subprocess.Popen(
-            cmd,
+        if getattr(sys, "frozen", False):
+            # PyInstaller frozen exe: sys.executable is the compiled app, not python.
+            # Route via a special flag that freeze_support() intercepts.
+            cmd = [
+                sys.executable,
+                "--_pyserial-mux-broker",
+                port,
+                str(self._baudrate),
+                json.dumps(kwargs),
+            ]
+        else:
+            cmd = [
+                sys.executable,
+                "-m",
+                "pySerialMux._broker_entry",
+                port,
+                str(self._baudrate),
+                json.dumps(kwargs),
+            ]
+        popen_kwargs: dict = dict(
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
             close_fds=True,
         )
+        if _IS_WINDOWS:
+            popen_kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+        subprocess.Popen(cmd, **popen_kwargs)
 
     # ------------------------------------------------------------------
     # File-lock helpers (prevent thundering-herd broker spawning)

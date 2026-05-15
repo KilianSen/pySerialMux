@@ -1,6 +1,6 @@
 """pyserial-mux: Drop-in 1-to-N multiplexer for hardware serial interfaces."""
 
-from .proxy import Serial
+from .proxy import Serial, freeze_support
 import serial as _serial
 
 
@@ -9,4 +9,4 @@ def patch_all():
     _serial.Serial = Serial
 
 
-__all__ = ["Serial", "patch_all"]
+__all__ = ["Serial", "patch_all", "freeze_support"]
