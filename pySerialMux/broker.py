@@ -16,6 +16,7 @@ import serial
 
 from .protocol import (
     MSG_HEADER_SIZE,
+    Direction,
     MsgType,
     OriginType,
     decode_header,
@@ -300,18 +301,18 @@ class BrokerServer:
             if changed or client is newcomer:
                 client.send(msg)
 
-    def _broadcast_log(self, origin_type: OriginType, origin_id: str | None, data: bytes):
+    def _broadcast_log(self, origin_type: OriginType, origin_id: str | None, direction: Direction, data: bytes):
         """Send a binary log message to all clients that have logs enabled."""
         if not data:
             return
-        
-        # Format: [8 bytes timestamp (double)][1 byte origin_type][1 byte origin_id_len][origin_id][binary_data]
+
+        # Format: [8 bytes timestamp (double)][1 byte origin_type][1 byte direction][1 byte origin_id_len][origin_id][binary_data]
         ts = time.time()
         oid_bytes = str(origin_id or "").encode()
         if len(oid_bytes) > 255:
             oid_bytes = oid_bytes[:255]
-        
-        payload = struct.pack(">dB", ts, int(origin_type)) + struct.pack("B", len(oid_bytes)) + oid_bytes + data
+
+        payload = struct.pack(">dBB", ts, int(origin_type), int(direction)) + struct.pack("B", len(oid_bytes)) + oid_bytes + data
         msg = encode_msg(MsgType.LOG_DATA, payload)
         
         with self._clients_lock:
@@ -339,7 +340,7 @@ class BrokerServer:
 
     def _handle_write(self, sender: _ClientHandler, payload: bytes):
         log.debug("Broker _handle_write from %s: %r", sender.client_id, payload)
-        self._broadcast_log(OriginType.CLIENT, sender.client_id, payload)
+        self._broadcast_log(OriginType.CLIENT, sender.client_id, Direction.RX, payload)
         if sender.target_id:
             with self._clients_lock:
                 targets = [c for c in self._clients if c.client_id == sender.target_id]
@@ -349,6 +350,7 @@ class BrokerServer:
             msg = encode_msg(MsgType.DATA, payload)
             for target in targets:
                 target.send(msg)
+                self._broadcast_log(OriginType.CLIENT, target.client_id, Direction.TX, payload)
             return
 
         iface = sender.virtual_interface
@@ -383,7 +385,7 @@ class BrokerServer:
         target_id = target_id_bytes.decode()
         data = payload[1 + tid_len :]
 
-        self._broadcast_log(OriginType.CLIENT, sender.client_id, data)
+        self._broadcast_log(OriginType.CLIENT, sender.client_id, Direction.RX, data)
 
         with self._clients_lock:
             targets = [c for c in self._clients if c.client_id == target_id]
@@ -395,6 +397,7 @@ class BrokerServer:
         msg = encode_msg(MsgType.DATA, data)
         for target in targets:
             target.send(msg)
+            self._broadcast_log(OriginType.CLIENT, target.client_id, Direction.TX, data)
 
     def _handle_kv_set(self, sender: _ClientHandler, payload: bytes):
         """Update a key in the shared store and broadcast it."""
@@ -448,7 +451,7 @@ class BrokerServer:
             try:
                 data = self._serial.read(self._serial.in_waiting or 1)
                 if data:
-                    self._broadcast_log(OriginType.SERIAL, self._port, data)
+                    self._broadcast_log(OriginType.SERIAL, self._port, Direction.RX, data)
                     self._broadcast(data)
             except serial.SerialException as exc:
                 log.error("Serial read error: %s", exc)
@@ -461,7 +464,7 @@ class BrokerServer:
             try:
                 payload = self._write_queue.get(timeout=0.1)
                 self._serial.write(payload)
-                self._broadcast_log(OriginType.SERIAL, self._port, payload)
+                self._broadcast_log(OriginType.SERIAL, self._port, Direction.TX, payload)
             except queue.Empty:
                 continue
             except serial.SerialException as exc:

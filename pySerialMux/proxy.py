@@ -19,6 +19,7 @@ from collections import deque
 
 from .protocol import (
     MSG_HEADER_SIZE,
+    Direction,
     MsgType,
     OriginType,
     decode_header,
@@ -580,17 +581,19 @@ class Serial:
                     all_ids = json.loads(payload.decode())
                     self.other_clients = [cid for cid in all_ids if cid != self._client_id]
                 elif msg_type == MsgType.LOG_DATA:
-                    # Payload: [8 bytes timestamp (double)][1 byte origin_type][1 byte origin_id_len][origin_id][binary_data]
-                    if len(payload) >= 10:
-                        ts, otype_val = struct.unpack(">dB", payload[:9])
+                    # Payload: [8 bytes timestamp (double)][1 byte origin_type][1 byte direction][1 byte origin_id_len][origin_id][binary_data]
+                    if len(payload) >= 11:
+                        ts, otype_val, dir_val = struct.unpack(">dBB", payload[:10])
                         otype = OriginType(otype_val)
-                        oid_len = payload[9]
-                        oid = payload[10 : 10 + oid_len].decode()
-                        data = payload[10 + oid_len :]
+                        direction = Direction(dir_val)
+                        oid_len = payload[10]
+                        oid = payload[11 : 11 + oid_len].decode()
+                        data = payload[11 + oid_len :]
                         log_entry = {
                             "timestamp": ts,
                             "origin_type": otype,
                             "origin_id": oid,
+                            "direction": direction,
                             "data": data,
                         }
                         self._log_queue.append(log_entry)

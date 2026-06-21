@@ -258,8 +258,8 @@ class TestBrokerTwoClients(unittest.TestCase):
 
     def test_logging_functionality(self):
         from pySerialMux.proxy import Serial
-        from pySerialMux.protocol import OriginType
-        
+        from pySerialMux.protocol import Direction, OriginType
+
         # We'll use a real Serial proxy for this to test the full stack
         with Serial(self.broker._port, baudrate=9600, logs=True) as s1:
             # Client 2 doesn't need logs
@@ -267,27 +267,72 @@ class TestBrokerTwoClients(unittest.TestCase):
                 # Trigger a write from s2 (Client origin)
                 test_payload = b"hello log"
                 s2.write(test_payload)
-                
+
                 # Give time for log to propagate
                 time.sleep(0.3)
-                
+
                 logs = s1.get_logs()
-                # We expect at least two logs: 
-                # 1. CLIENT 'Alpha' writing 'hello log'
-                # 2. SERIAL '/dev/ttyMOCK0' writing 'hello log' (because it went to serial)
-                
+                # We expect at least two logs:
+                # 1. CLIENT 'Alpha' writing 'hello log' (received by broker -> RX)
+                # 2. SERIAL '/dev/ttyMOCK0' writing 'hello log' to the port (TX)
+
                 self.assertTrue(len(logs) >= 2)
-                
-                # Find client log
+
+                # Find client log: data received from a client is RX from the broker's view
                 client_log = next((l for l in logs if l["origin_type"] == OriginType.CLIENT and l["data"] == test_payload), None)
                 self.assertIsNotNone(client_log)
                 self.assertEqual(client_log["origin_id"], "Alpha")
+                self.assertEqual(client_log["direction"], Direction.RX)
                 self.assertIsInstance(client_log["timestamp"], float)
 
-                # Find serial log
+                # Find serial log: bytes written to the port are TX
                 serial_log = next((l for l in logs if l["origin_type"] == OriginType.SERIAL and l["data"] == test_payload), None)
                 self.assertIsNotNone(serial_log)
+                self.assertEqual(serial_log["direction"], Direction.TX)
                 self.assertIsInstance(serial_log["timestamp"], float)
+
+    def test_logging_directions(self):
+        from pySerialMux.proxy import Serial
+        from pySerialMux.protocol import Direction, OriginType
+
+        with Serial(self.broker._port, baudrate=9600, logs=True, client_id="Logger") as s1:
+            with Serial(self.broker._port, baudrate=9600, client_id="Alpha") as s2:
+                # 1. Serial write (TX) vs serial read (RX) are distinguishable.
+                #    Writing goes to the port (TX); injecting into the mock read
+                #    queue makes the reader thread emit an RX.
+                s2.write(b"ping")
+                self.mock_serial._rq.append(b"pong")
+                time.sleep(0.3)
+                logs = s1.get_logs()
+
+                serial_tx = next((l for l in logs if l["origin_type"] == OriginType.SERIAL
+                                  and l["data"] == b"ping"), None)
+                self.assertIsNotNone(serial_tx)
+                self.assertEqual(serial_tx["direction"], Direction.TX)
+
+                serial_rx = next((l for l in logs if l["origin_type"] == OriginType.SERIAL
+                                  and l["data"] == b"pong"), None)
+                self.assertIsNotNone(serial_rx)
+                self.assertEqual(serial_rx["direction"], Direction.RX)
+
+                # 2. Targeted send logs RX at the sender and TX per target.
+                s1.clear_logs()
+                targeted = b"direct"
+                s2.write(targeted, target_id="Logger")
+                time.sleep(0.3)
+                logs = s1.get_logs()
+
+                rx = next((l for l in logs if l["data"] == targeted
+                           and l["origin_type"] == OriginType.CLIENT
+                           and l["origin_id"] == "Alpha"
+                           and l["direction"] == Direction.RX), None)
+                self.assertIsNotNone(rx)
+
+                tx = next((l for l in logs if l["data"] == targeted
+                           and l["origin_type"] == OriginType.CLIENT
+                           and l["origin_id"] == "Logger"
+                           and l["direction"] == Direction.TX), None)
+                self.assertIsNotNone(tx)
 
 @unittest.skipIf(
     shutil.which("socat") is None or sys.platform == "win32",

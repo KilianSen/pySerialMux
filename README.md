@@ -104,8 +104,9 @@ When `logs=True` is enabled, the broker aggregates all traffic (serial and clien
 Retrieve all buffered log entries:
 
 ```python
-# Returns a list of dicts: 
-# [{'timestamp': float, 'origin_type': OriginType, 'origin_id': str, 'data': bytes}, ...]
+# Returns a list of dicts:
+# [{'timestamp': float, 'origin_type': OriginType, 'origin_id': str, 'direction': Direction, 'data': bytes}, ...]
+# direction is Direction.TX (leaving the broker) or Direction.RX (entering the broker).
 logs = ser.get_logs()
 ```
 
@@ -115,7 +116,7 @@ Hook into every message as it arrives:
 
 ```python
 def my_logger(entry):
-    print(f"[{entry['timestamp']}] {entry['origin_id']}: {entry['data']}")
+    print(f"[{entry['timestamp']}] {entry['origin_id']} {entry['direction'].name}: {entry['data']}")
 
 ser.on_log = my_logger
 ```

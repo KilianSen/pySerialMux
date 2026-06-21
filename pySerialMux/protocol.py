@@ -17,12 +17,17 @@ class MsgType(IntEnum):
     KV_SET = 0x09 # client -> broker: [1b key len][key][value]
     KV_GET = 0x0A # client -> broker: [key]
     KV_UPDATE = 0x0B # broker -> client: [1b key len][key][value]
-    LOG_DATA = 0x0C # broker -> client: [8b ts][1b origin_type][1b origin_id_len][origin_id][data]
+    LOG_DATA = 0x0C # broker -> client: [8b ts][1b origin_type][1b direction][1b origin_id_len][origin_id][data]
 
 
 class OriginType(IntEnum):
     SERIAL = 0x01
     CLIENT = 0x02
+
+
+class Direction(IntEnum):
+    TX = 0x01  # leaving the broker (to serial port or target client)
+    RX = 0x02  # entering the broker (from serial port or client)
 
 
 def encode_msg(msg_type: MsgType, payload: bytes = b'') -> bytes:
