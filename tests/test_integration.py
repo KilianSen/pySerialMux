@@ -117,6 +117,20 @@ class TestBrokerTwoClients(unittest.TestCase):
             except OSError:
                 pass
 
+    def _wait_ready(self, n, timeout=1.0):
+        """Block until at least *n* clients are registered and marked ready.
+
+        The broker sends ACK just before setting ``ready = True``, so a
+        client handshake can return before the broker flips the flag.
+        """
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            with self.broker._clients_lock:
+                if sum(1 for c in self.broker._clients if c.ready) >= n:
+                    return
+            time.sleep(0.01)
+        self.fail(f"timed out waiting for {n} ready clients")
+
     def test_two_clients_receive_ack(self):
         c1 = _connect_unix(self.sock_path)
         c2 = _connect_unix(self.sock_path)
@@ -137,6 +151,10 @@ class TestBrokerTwoClients(unittest.TestCase):
         try:
             _handshake(c1)
             _handshake(c2)
+
+            # Ensure both clients are ready before broadcasting; _broadcast
+            # silently skips not-yet-ready clients.
+            self._wait_ready(2)
 
             # Inject data into the broker by injecting into mock serial
             test_data = b"broadcast_test"
